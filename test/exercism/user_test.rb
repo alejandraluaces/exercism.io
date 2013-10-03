@@ -2,7 +2,7 @@ require './test/mongo_helper'
 
 require 'exercism/locksmith'
 require 'exercism/problem_set'
-require 'exercism/input_sanitation'
+require 'exercism/team'
 require 'exercism/user'
 require 'exercism/null_submission'
 require 'exercism/exercise'
@@ -43,6 +43,12 @@ class UserTest < Minitest::Test
     user = User.new(current: {'nong' => 'two'}, completed: {'nong' => ['one']})
     one = Exercise.new('nong', 'one')
     assert user.nitpicker_on?(one)
+  end
+
+  def test_user_is_not_nitpicker_on_current_assignment
+    user = User.new(current: {'nong' => 'one'})
+    one = Exercise.new('nong', 'one')
+    refute user.nitpicker_on?(one)
   end
 
   def test_user_not_a_guest
@@ -133,8 +139,8 @@ class UserTest < Minitest::Test
     user.submissions << create_submission(exercise, :code => "s1", state: 'superseded')
     user.submissions << create_submission(exercise, :code => "s2")
     user.save
+    user.reload
 
-    assert_equal [true], user.ongoing.map(&:submitted?)
     assert_equal ["s2"], user.ongoing.map(&:code)
   end
 
@@ -144,8 +150,8 @@ class UserTest < Minitest::Test
   end
 
   def test_user_done_without_submissions
-    user = User.create(current: {'nong' => 'one'}, completed: {'nong' => ['one']})
-    assert_equal [false], user.done.map(&:submitted?)
+    user = User.create(current: {'nong' => 'one'})
+    assert_equal [], user.done
   end
 
   def test_user_done_with_submissions
@@ -155,8 +161,8 @@ class UserTest < Minitest::Test
     user.submissions << create_submission(exercise, :code => "s1")
     user.submissions << create_submission(exercise, :code => "s2")
     user.save
+    user.reload
 
-    assert_equal [true], user.done.map(&:submitted?)
     assert_equal ["s2"], user.done.map(&:code)
   end
 
@@ -170,6 +176,18 @@ class UserTest < Minitest::Test
 
   def test_user_is_not_locksmith_by_default
     refute User.new.locksmith?
+  end
+
+  def test_find_user_by_case_insensitive_username
+    User.create username: 'alice'
+    assert_equal 'alice', User.find_by_username('ALICE').username
+  end
+
+  def test_find_a_bunch_of_users_by_case_insensitive_username
+    User.create username: 'alice'
+    User.create username: 'bob'
+    usernames = User.find_in_usernames(['ALICE', 'BOB']).map(&:username).sort
+    assert_equal ['alice', 'bob'], usernames
   end
 
   private

@@ -1,3 +1,4 @@
+require 'airbrake'
 require 'exercism'
 require 'sinatra/petroglyph'
 require 'will_paginate'
@@ -5,37 +6,48 @@ require 'will_paginate/mongoid'
 
 require 'app/presenters/workload'
 
-require 'app/help'
-require 'app/setup'
-require 'app/nitpick'
-require 'app/api'
 require 'app/auth'
 require 'app/client'
 require 'app/curriculum'
+require 'app/help'
+require 'app/nitpick'
+require 'app/setup'
 require 'app/submissions'
-require 'app/exercises'
+require 'app/teams'
 require 'app/users'
-require 'app/not_found' # always include last
 
-require 'app/helpers/submissions_helper'
-require 'app/helpers/site_title_helper'
+# Must be included at this point in order
+require 'app/exercises'
+require 'app/not_found'
+
 require 'app/helpers/fuzzy_time_helper'
-require 'app/helpers/gravatar_helper'
 require 'app/helpers/github_link_helper'
+require 'app/helpers/gravatar_helper'
 require 'app/helpers/profile_helper'
-require 'app/helpers/gem_helper'
+require 'app/helpers/site_title_helper'
+require 'app/helpers/submissions_helper'
+require 'app/helpers/markdown_helper'
 
 require 'services'
 
 class ExercismApp < Sinatra::Base
 
-  set :environment, ENV.fetch('RACK_ENV') { 'development' }.to_sym
+  set :environment, ENV.fetch('RACK_ENV') { :development }.to_sym
   set :root, 'lib/app'
   set :method_override, true
 
   enable :sessions
   set :session_secret, ENV.fetch('SESSION_SECRET') { "Need to know only." }
   use Rack::Flash
+
+  configure :production do
+    Airbrake.configure do |config|
+      config.api_key = ENV['AIRBRAKE_API_KEY']
+    end
+
+    use Airbrake::Rack
+    enable :raise_errors
+  end
 
   helpers WillPaginate::Sinatra::Helpers
   helpers Sinatra::SubmissionsHelper
@@ -44,7 +56,7 @@ class ExercismApp < Sinatra::Base
   helpers Sinatra::GravatarHelper
   helpers Sinatra::GithubLinkHelper
   helpers Sinatra::ProfileHelper
-  helpers Sinatra::GemHelper
+  helpers Sinatra::MarkdownHelper
 
   helpers do
 
@@ -56,45 +68,13 @@ class ExercismApp < Sinatra::Base
       end
     end
 
-    def please_login(notice = nil)
-      if current_user.guest?
-        flash[:notice] = notice if notice
-        redirect "/please-login?return_path=#{request.path_info}"
-      end
-    end
-
-    def login_url(return_path = nil)
-      url = Github.login_url
-      if return_path
-        url << "&redirect_uri=#{site_root}/github/callback#{return_path}"
-      end
-      url
-    end
-
-    def login(user)
-      session[:github_id] = user.github_id
-    end
-
-    def logout
-      session[:github_id] = nil
-      @current_user = nil
-    end
-
     def current_user
-      return @current_user if @current_user
-
-      if session[:github_id]
-        @current_user = User.find_by(github_id: session[:github_id])
-      else
-        @current_user = Guest.new
-      end
-    end
-
-    def md(text, language = nil)
-      if language
-        Markdown.render("```#{language}\n#{text}\n```")
-      else
-        Markdown.render(text)
+      @current_user ||= begin
+        if request.cookies['_exercism_login']
+          User.find_by(github_id: request.cookies['_exercism_login'])
+        else
+          Guest.new
+        end
       end
     end
 
@@ -112,16 +92,6 @@ class ExercismApp < Sinatra::Base
 
     def active_nav(path)
       if path == request.path_info
-        "active"
-      else
-        ""
-      end
-    end
-
-    def active_top_nav(path=nil)
-      if path == "/"
-        active_nav(path)
-      elsif request.path_info.match(/#{path}/)
         "active"
       else
         ""

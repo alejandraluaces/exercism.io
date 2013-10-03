@@ -18,26 +18,35 @@ class User
   has_many :submissions
   has_many :notifications
   has_many :comments
+  has_and_belongs_to_many :teams, inverse_of: :member
+  has_many :teams_created, class_name: "Team", inverse_of: :creator
 
   def self.from_github(id, username, email, avatar_url)
-    user = User.where(github_id: id).first
-    user ||= User.new(username: username, github_id: id, email: email, avatar_url: avatar_url)
-    if avatar_url && !user.avatar_url
-      user.avatar_url = avatar_url.gsub(/\?.+$/, '')
-    end
-    user.username = username
+    user = User.where(github_id: id).first ||
+           User.new(github_id: id, email: email)
+
+    user.username   = username
+    user.avatar_url = avatar_url.gsub(/\?.+$/, '') if avatar_url && !user.avatar_url
     user.save
     user
   end
 
+  def self.find_in_usernames(usernames)
+    User.in(username: usernames.map {|u| /\A#{u}\z/i})
+  end
+
+  def self.find_by_username(username)
+    where(username: /\A#{username}\z/i).first
+  end
+
   def random_work
-    return nil if completed.keys.empty?
     completed.keys.shuffle.each do |language|
-      work = Submission.pending.where(language: language).in(slug: completed[language]).asc(:nc)
+      work = Submission.pending.unmuted_for(username).where(language: language).in(slug: completed[language]).asc(:nc)
       if work.count > 0
         return work.limit(10).to_a.sample
       end
     end
+    nil
   end
 
   def ongoing
@@ -46,9 +55,9 @@ class User
 
   def done
     @done ||= completed_exercises.map do |lang, exercises|
-      exercises.map do |exercise|
-        latest_submission_on(exercise) || NullSubmission.new(exercise)
-      end
+      exercises.map { |exercise|
+        latest_submission_on(exercise)
+      }
     end.flatten
   end
 
@@ -73,8 +82,7 @@ class User
     doing?(language) || did?(language) || locksmith_in?(language)
   end
 
-  def complete!(exercise, options = {})
-    trail = options[:on]
+  def complete!(exercise)
     self.completed[exercise.language] ||= []
     self.completed[exercise.language] << exercise.slug
     self.current.delete(exercise.language)
@@ -98,7 +106,7 @@ class User
   end
 
   def nitpicker_on?(exercise)
-    locksmith_in?(exercise.language) || completed?(exercise) || working_on?(exercise)
+    locksmith_in?(exercise.language) || completed?(exercise)
   end
 
   def nitpicker?
@@ -118,17 +126,17 @@ class User
   end
 
   def stash_list
-    list = []
-    self.stashed_submissions.each do |sub|
-      list << sub.stash_name
-    end
-    return list 
+    self.stashed_submissions.map(&:stash_name)
   end
 
   def clear_stash(filename)
     self.stashed_submissions.each do |sub|
       sub.delete if sub.stash_name == filename
     end
+  end
+
+  def latest_submission
+    @latest_submission ||= submissions.pending.order_by(at: :desc).first
   end
 
   private
@@ -142,7 +150,11 @@ class User
   end
 
   def secret
-    "There is solemn satisfaction in doing the best you can for #{github_id} billion people."
+    if ENV['USER_API_KEY']
+      "#{ENV['USER_API_KEY']} #{github_id}"
+    else
+      "There is solemn satisfaction in doing the best you can for #{github_id} billion people."
+    end
   end
 end
 
